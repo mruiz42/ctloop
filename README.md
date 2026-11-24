@@ -97,10 +97,15 @@ modification or a failing combined suite), `2` usage, `3` stopped at a cap.
 - **All writes go through `safe_path`**, which resolves real paths and refuses anything
   outside `runs/<id>/` (`../` and symlink escapes included). Run folders are never reused.
   Nothing outside the run folder is ever deleted.
-- **Generated tests run under `sandbox-exec`**: no network, no file writes outside the run
-  folder (plus `/dev` and the per-user temp dirs). Minimal environment: no API keys or
-  tokens; `HOME`/`TMPDIR` point at the run folder; `PYTHONDONTWRITEBYTECODE=1`; no pytest
-  cache. If the sandbox can't be applied, the run fails closed.
+- **Generated tests run under `sandbox-exec`**: no network, and file writes only in the
+  active copy (`work/` or `verify/`) and `runs/<id>/tmp/` (plus `/dev`; system temp is
+  not writable). `state.json`, `calls/`, `pr/` and `quarantine/` are not writable by tests.
+  The profile is passed inline (`sandbox-exec -p`, by absolute path), so there is no
+  profile file to tamper with. Reads of common secret locations (`~/.ssh`, `~/.aws`,
+  `~/.gnupg`, `~/.netrc`, `~/.config/gh`, `~/Library/Keychains`, `~/.docker/config.json`)
+  are denied. Minimal environment: no API keys or tokens; `HOME`/`TMPDIR` point at
+  `runs/<id>/tmp/`; `PYTHONDONTWRITEBYTECODE=1`; no pytest cache. If the sandbox can't be
+  applied, the run fails closed.
 - **The model has no tools** (`claude -p --tools ""`), the prompt goes on stdin (no shell),
   `cwd` is the run folder and `--safe-mode` keeps the project's CLAUDE.md/skills out. If the
   CLI ever rejects `--safe-mode` or `--max-turns`, it retries once without it, warns, and
@@ -118,6 +123,14 @@ blocks, abstract methods, Protocol bodies, `pass`/`...` bodies) is skipped witho
 
 **Not caught:** a fix that changes an expected value to match buggy output. That is why
 quarantined and added tests are listed in pr.md for human review.
+
+## Known risks
+
+- **Other reads are still allowed.** Generated tests can read any file not on the deny
+  list above, and their output (failure tail) is sent to the model in the fix prompt and
+  copied into pr.md. Don't run this on a machine with secrets in other locations.
+- **The spend cap can overshoot by at most one call** (one `--max-budget-usd`, about
+  $0.25), because the cap is checked before each call, not during it.
 
 ## Known limits / next steps
 

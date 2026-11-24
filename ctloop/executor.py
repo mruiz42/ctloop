@@ -1,9 +1,13 @@
 """Runs pytest and coverage on a copy of the target, contained by macOS sandbox-exec (A1).
 
 Generated tests are arbitrary model-written code, so every run gets:
-- a sandbox profile that denies all network access and denies file writes outside
-  runs/<id>/ (plus /dev and the per-user temp dirs Python needs),
-- a minimal environment (no API keys or tokens; HOME and TMPDIR point at the run folder),
+- a sandbox profile that denies all network access and denies file writes outside the
+  active copy (work/ or verify/) and runs/<id>/tmp/ (plus /dev). The system temp dir is not
+  writable: it would cover a run folder placed under it. state.json, calls/, pr/ and quarantine/ stay read-only to it,
+- the profile passed inline (``sandbox-exec -p``), so there is no profile file the
+  sandboxed code could rewrite to loosen later runs,
+- reads denied for common secret locations under the real HOME (other reads are allowed),
+- a minimal environment (no API keys or tokens; HOME and TMPDIR point at runs/<id>/tmp),
 - a timeout, PYTHONDONTWRITEBYTECODE=1, and no pytest cache.
 If the sandbox can't be applied we fail closed, unless --unsafe-no-sandbox was given.
 """
@@ -40,21 +44,39 @@ class ExecResult:
         return "\n".join(self.output.splitlines()[-lines:])
 
 
-def sandbox_profile(run_dir: Path) -> str:
-    """Build the sandbox-exec profile text for ``run_dir``.
+# Secret locations under the real HOME that generated tests must not read: their output
+# goes into fix prompts and pr.md. Not exhaustive; other reads stay allowed (README).
+_SECRET_SUBPATHS = (".ssh", ".aws", ".gnupg", ".netrc", ".config/gh", "Library/Keychains",
+                    ".docker/config.json")
+
+
+def _quote(path: Path) -> str:
+    text = str(Path(path).resolve())
+    if '"' in text or "\\" in text:
+        raise SandboxError(f"path can't be embedded in a sandbox profile: {text}")
+    return f'"{text}"'
+
+
+def sandbox_profile(writable: list[Path], home: Path | None = None) -> str:
+    """Build the sandbox-exec profile text allowing writes only under ``writable``.
+
+    Args:
+        writable: directories the sandboxed process may write (the active copy and tmp/).
+        home: real HOME whose secret subpaths are read-denied (defaults to ``Path.home()``).
 
     Raises:
-        SandboxError: if the path contains characters we can't safely embed.
+        SandboxError: if a path contains characters we can't safely embed.
     """
-    root = str(Path(run_dir).resolve())
-    if '"' in root or "\\" in root:
-        raise SandboxError(f"run folder path can't be embedded in a sandbox profile: {root}")
+    allowed = " ".join(f"(subpath {_quote(p)})" for p in writable)
+    home = Path.home() if home is None else home
+    secrets = " ".join(f"(subpath {_quote(home / s)})" for s in _SECRET_SUBPATHS)
     return (
         "(version 1)\n"
         "(allow default)\n"
         "(deny network*)\n"
+        f"(deny file-read* {secrets})\n"
         "(deny file-write*)\n"
-        f'(allow file-write* (subpath "{root}") (subpath "/private/var/folders") (regex #"^/dev/"))\n'
+        f'(allow file-write* {allowed} (regex #"^/dev/"))\n'
     )
 
 
@@ -64,40 +86,59 @@ class Executor:
     def __init__(self, run_dir: Path, *, unsafe_no_sandbox: bool = False) -> None:
         self.run_dir = Path(run_dir).resolve()
         self.unsafe = unsafe_no_sandbox
-        self._checked = False
-        self._profile_path = self.run_dir / "sandbox.sb"
+        self._sandbox_exe: str | None = None
+        self.tmp = self.run_dir / "tmp"
 
     def _env(self) -> dict[str, str]:
-        tmp = self.run_dir / "tmp"
+        tmp = self.tmp
         tmp.mkdir(exist_ok=True)
         python_bin = str(Path(sys.executable).parent)
         return {
             "PATH": f"{python_bin}:/usr/bin:/bin",
             "PYTHONDONTWRITEBYTECODE": "1",
-            "HOME": str(self.run_dir),
+            "HOME": str(tmp),
             "TMPDIR": str(tmp),
             "LANG": "en_US.UTF-8",
         }
 
-    def _ensure_sandbox(self) -> None:
-        """Write the profile and prove it applies once; fail closed if it doesn't."""
-        if self._checked or self.unsafe:
-            return
+    def _profile(self, cwd: Path) -> str:
+        """Profile for one call: writable = the active copy (``cwd``) and tmp/ only.
+
+        Raises:
+            SandboxError: if ``cwd`` is not a folder inside the run folder.
+        """
+        cwd = Path(cwd).resolve()
+        if cwd == self.run_dir or self.run_dir not in cwd.parents:
+            raise SandboxError(f"sandboxed cwd must be a folder inside the run folder: {cwd}")
+        self.tmp.mkdir(exist_ok=True)
+        return sandbox_profile([cwd, self.tmp])
+
+    def _ensure_sandbox(self) -> str:
+        """Find sandbox-exec and prove a profile applies once; fail closed if not.
+
+        Returns the absolute sandbox-exec path, which ``run`` uses instead of a PATH lookup.
+        """
+        if self._sandbox_exe is not None:
+            return self._sandbox_exe
         exe = shutil.which("sandbox-exec")
         if exe is None:
             raise SandboxError("sandbox-exec not found; refusing to run generated tests (use --unsafe-no-sandbox to override)")
-        self._profile_path.write_text(sandbox_profile(self.run_dir), encoding="utf-8")
+        exe = str(Path(exe).resolve())
+        self.tmp.mkdir(exist_ok=True)
         probe = subprocess.run(
-            [exe, "-f", str(self._profile_path), "/usr/bin/true"], capture_output=True, text=True, timeout=30
+            [exe, "-p", sandbox_profile([self.tmp]), "/usr/bin/true"], capture_output=True, text=True, timeout=30
         )
         if probe.returncode != 0:
             raise SandboxError(f"sandbox profile failed to apply: {probe.stderr.strip() or probe.returncode}")
-        self._checked = True
+        self._sandbox_exe = exe
+        return exe
 
     def run(self, argv: list[str], *, cwd: Path, timeout: float) -> ExecResult:
         """Run ``argv`` in ``cwd`` under the sandbox with a timeout; never raises on test failure."""
-        self._ensure_sandbox()
-        full = argv if self.unsafe else ["sandbox-exec", "-f", str(self._profile_path), *argv]
+        if self.unsafe:
+            full = argv
+        else:
+            full = [self._ensure_sandbox(), "-p", self._profile(cwd), *argv]
         try:
             proc = subprocess.run(
                 full, cwd=cwd, env=self._env(), capture_output=True, text=True, timeout=timeout

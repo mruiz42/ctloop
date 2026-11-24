@@ -18,10 +18,46 @@ def _run(run: Path, code: str):
     return Executor(run).run([sys.executable, "-c", code], cwd=work, timeout=30)
 
 
-def test_write_inside_run_allowed(tmp_path: Path) -> None:
+def test_write_inside_work_and_tmp_allowed(tmp_path: Path) -> None:
     run = workspace.create_run_dir(tmp_path / "runs", "r")
-    res = _run(run, f"open({str(run / 'ok.txt')!r}, 'w').write('x')")
-    assert res.returncode == 0 and (run / "ok.txt").exists()
+    res = _run(run, f"open({str(run / 'work' / 'ok.txt')!r}, 'w').write('x');"
+                    f"open({str(run / 'tmp' / 'ok.txt')!r}, 'w').write('x')")
+    assert res.returncode == 0, res.output
+    assert (run / "work" / "ok.txt").exists() and (run / "tmp" / "ok.txt").exists()
+
+
+def test_tool_state_not_writable(tmp_path: Path) -> None:
+    """B2: a test can't forge state.json, calls/, pr/ or quarantine/."""
+    run = workspace.create_run_dir(tmp_path / "runs", "r")
+    for name in ("state.json", "calls/x.json", "pr/pr.md", "quarantine/x.py"):
+        (run / name).parent.mkdir(parents=True, exist_ok=True)
+        res = _run(run, f"open({str(run / name)!r}, 'w').write('forged')")
+        assert res.returncode != 0 and "Operation not permitted" in res.output, name
+        assert not (run / name).exists() or (run / name).read_text() != "forged"
+
+
+def test_no_profile_file_to_tamper_with(tmp_path: Path) -> None:
+    """B1: writing a permissive profile into the run folder doesn't loosen the next run."""
+    run = workspace.create_run_dir(tmp_path / "runs", "r")
+    ex = Executor(run)
+    work = run / "work"
+    work.mkdir()
+    loose = "(version 1)(allow default)"
+    ex.run([sys.executable, "-c", f"open({str(run / 'sandbox.sb')!r}, 'w').write({loose!r})"],
+           cwd=work, timeout=30)
+    ex.run([sys.executable, "-c", f"open({str(work / 'sandbox.sb')!r}, 'w').write({loose!r})"],
+           cwd=work, timeout=30)
+    outside = run / "escaped.txt"
+    res = ex.run([sys.executable, "-c", f"open({str(outside)!r}, 'w').write('x')"], cwd=work, timeout=30)
+    assert res.returncode != 0 and not outside.exists()
+    assert not (run / "sandbox.sb").exists()
+
+
+def test_secret_reads_denied(tmp_path: Path) -> None:
+    run = workspace.create_run_dir(tmp_path / "runs", "r")
+    ssh = Path.home() / ".ssh"
+    res = _run(run, f"import os; os.listdir({str(ssh)!r})")
+    assert res.returncode != 0 and ("Operation not permitted" in res.output or "No such file" in res.output)
 
 
 def test_write_outside_run_blocked(tmp_path: Path) -> None:
@@ -55,4 +91,4 @@ def test_missing_sandbox_exec_fails_closed(tmp_path: Path, monkeypatch) -> None:
 
 def test_profile_rejects_quote_in_path() -> None:
     with pytest.raises(SandboxError):
-        sandbox_profile(Path('/tmp/a"b'))
+        sandbox_profile([Path('/tmp/a"b')])
