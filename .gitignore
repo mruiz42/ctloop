@@ -1,2 +1,7 @@
 .DS_Store
 .claude/settings.local.json
+.venv/
+runs/
+__pycache__/
+*.pyc
+.coverage*

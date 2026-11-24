@@ -1,0 +1,13 @@
+[project]
+name = "ctloop"
+version = "0.1.0"
+description = "Converging test loop: find untested behavior, write tests, run them on a copy, fix, open a PR folder."
+requires-python = ">=3.15"
+dependencies = ["pytest==9.2.0", "coverage==7.17.5"]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-p no:cacheprovider"
