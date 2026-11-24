@@ -56,7 +56,7 @@ Stages run out of order fail with a clear message (`fix` needs `run`, and so on)
 ## Run folder
 
 ```
-runs/<id>/state.json  run.log  sandbox.sb  pytest.ini
+runs/<id>/state.json  run.log  pytest.ini
           calls/NNN-<kind>-<slug>.{prompt,response}.txt   every model exchange, for audit
           work/        copy of the target + generated tests
           verify/      fresh copy + changes.patch applied ("after" coverage)
