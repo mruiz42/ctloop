@@ -1,0 +1,20 @@
+The docstring says the result keeps limit - 1 characters plus a single "…".
+
+```python
+import pytest
+
+from sandbox.strings import truncate
+
+
+def test_truncate_long_text():
+    assert truncate("abcdef", 4) == "abc…"
+
+
+def test_truncate_short_text_unchanged():
+    assert truncate("abc", 5) == "abc"
+
+
+def test_truncate_rejects_bad_limit():
+    with pytest.raises(ValueError):
+        truncate("abc", 0)
+```

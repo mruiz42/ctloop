@@ -1,0 +1,14 @@
+```python
+import pytest
+
+from sandbox.pricing import total_with_tax
+
+
+def test_total_with_tax():
+    assert total_with_tax(100.0, 0.08) == 108.0
+
+
+def test_total_with_tax_rejects_negative():
+    with pytest.raises(ValueError):
+        total_with_tax(-1.0, 0.08)
+```

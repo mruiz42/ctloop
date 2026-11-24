@@ -1,0 +1,19 @@
+```python
+import pytest
+
+from sandbox.strings import truncate
+
+
+def test_truncate_long_text():
+    # Test bug on purpose (demo of the converge path): wrong ellipsis.
+    assert truncate("abcdef", 4) == "a..."
+
+
+def test_truncate_short_text_unchanged():
+    assert truncate("abc", 5) == "abc"
+
+
+def test_truncate_rejects_bad_limit():
+    with pytest.raises(ValueError):
+        truncate("abc", 0)
+```
