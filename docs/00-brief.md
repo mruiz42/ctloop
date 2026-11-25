@@ -1,6 +1,6 @@
 # 00 — Brief: Converging Test Loop
 
-Status: **DRAFT, awaiting user approval**. Started 2026-11-24 at 14:00 PST.
+Status: **APPROVED by the user at 14:06**. Started 2026-11-24 at 14:00 PST.
 
 ## Why
 Agent-platform companies need a tool that takes an existing codebase, finds behavior that has no tests, and closes those gaps on its own with tests that actually pass. We are building it as if it will ship to production: safe, capped, resumable, and auditable. The output is a reviewable "PR", not silent changes.
@@ -24,7 +24,7 @@ One command, pointed at a Python package folder, that:
 ## Constraints
 - **Never modify target source code.** The tool writes or deletes files only inside its own run folder (for example `runs/<run-id>/`). Generated tests always run on a **copy** of the target.
 - **Caps:** at most 30 model calls per run and 3 fix attempts per test by default, plus a per-call timeout. All can be set with CLI flags. Hitting a cap ends the run cleanly, with state saved and a PR folder written that shows what got done.
-- Python only (the installed 3.15.2). **No git or GitHub.** "Open a PR" means writing a folder: `<run>/pr/` containing `changes.patch` and `pr.md`, with one PR folder per run.
+- Python only (the installed 3.15.2). **No GitHub, no remotes, no push.** Local git commits per slice are allowed (user decision at 14:15); the *tool itself* never uses git. "Open a PR" means writing a folder: `<run>/pr/` containing `changes.patch` and `pr.md`, with one PR folder per run.
 - No paid tools besides Claude Code.
 - Production quality: clear errors, logging, typed and commented code, unit tests for the core logic.
 
@@ -41,3 +41,10 @@ One command, pointed at a Python package folder, that:
 
 ## Out of scope
 GitHub/git integration, CI, any UI, languages other than Python, mutation testing, and fixing bugs in the target code.
+
+## Decisions added after the investigation
+- Spend caps: `--max-budget-usd 0.25` per call and **$2 per run** (tracked from `total_cost_usd`, clean stop), both set via CLI flags.
+- Demo: the stub provider, plus one real `claude -p` run if time allows.
+- CLI isolation: cwd = run folder **and** `--safe-mode`, falling back to cwd only (with a warning) if `--safe-mode` errors.
+- The validator may do one small real run (about a 5-call cap). Everything else uses the stub.
+- Plan picks: plain fenced-code output, one call per function, `sonnet` default, `pyproject` + `uv sync`. Evolve files deferred. Hitting a cap exits with code 3. Local commits per slice.
